@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ua-searaft"
+version = "0.1.0"
+description = "Uncertainty-aware adaptive iteration stopping for SEA-RAFT optical flow"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "BSD-3-Clause" }
+authors = [{ name = "UA-SEA-RAFT authors" }]
+keywords = [
+  "optical-flow",
+  "sea-raft",
+  "uncertainty",
+  "early-exit",
+  "adaptive-computation",
+  "conformal-prediction",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: BSD License",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+]
+# The analysis half of the pipeline (criterion / sweep / conformal / plots)
+# is numpy-only on purpose, so it installs and runs without a GPU.
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.9",
+  "matplotlib>=3.6",
+  "tqdm>=4.64",
+]
+
+[project.optional-dependencies]
+gpu = [
+  "torch>=2.0",
+  "torchvision>=0.15",
+  "opencv-python>=4.6",
+  "einops>=0.6",
+  "huggingface_hub>=0.20",
+]
+dev = ["pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/USERNAME/ua-searaft"
+Upstream = "https://github.com/princeton-vl/SEA-RAFT"
+Paper = "https://arxiv.org/abs/2405.14793"
+
+[tool.setuptools]
+packages = ["ua_stop"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

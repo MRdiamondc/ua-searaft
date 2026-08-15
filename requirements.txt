@@ -1,0 +1,17 @@
+# UA-SEA-RAFT requirements.
+#
+# Install PyTorch FIRST, matching your CUDA build:
+#   https://pytorch.org/get-started/locally/
+# On Google Colab torch/torchvision/numpy/scipy/matplotlib/opencv are already
+# present, so in practice only `einops` and `huggingface_hub` are missing.
+
+torch>=2.0
+torchvision>=0.15
+numpy>=1.23
+scipy>=1.9
+matplotlib>=3.6
+opencv-python>=4.6
+einops>=0.6
+huggingface_hub>=0.20
+tqdm>=4.64
+pytest>=7.0

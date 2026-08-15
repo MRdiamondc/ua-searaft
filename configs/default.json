@@ -1,0 +1,68 @@
+{
+  "model": {
+    "cfg": "third_party/SEA-RAFT/config/eval/spring-M.json",
+    "url": "MemorySlices/Tartan-C-T-TSKH-spring540x960-M",
+    "path": null,
+    "scale": -1,
+    "iters": 12,
+    "var_min": 0.0,
+    "var_max": 10.0,
+    "pad_mode": "sintel",
+    "device": "cuda",
+    "amp": false
+  },
+  "source": {
+    "kind": "synthetic",
+    "n": 120,
+    "seed": 1234,
+    "size": [540, 960],
+    "max_rot_deg": 3.0,
+    "max_zoom": 0.04,
+    "max_shift_px": 25.0,
+    "images": [
+      "third_party/SEA-RAFT/custom/image1.jpg",
+      "third_party/SEA-RAFT/custom/image2.jpg"
+    ],
+    "folder": null,
+    "kitti_root": null
+  },
+  "uncertainty": {
+    "modes": ["raw", "geo", "clamped_lin", "clamped_log", "alpha"],
+    "quantiles": [0.5, 0.7, 0.8, 0.9, 0.95],
+    "primary_mode": "raw",
+    "primary_q": 0.8
+  },
+  "criterion": {
+    "q": 0.8,
+    "tau_rel": 0.02,
+    "tau_delta": 0.05,
+    "tau_abs": null,
+    "patience": 1,
+    "min_iters": 1,
+    "max_iters": 12,
+    "mode": "and",
+    "use_abs_delta": true
+  },
+  "sweep": {
+    "tau_rels": [0.002, 0.005, 0.01, 0.02, 0.04, 0.08, 0.15, 0.3],
+    "tau_deltas": [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1e9],
+    "patiences": [1, 2],
+    "modes": ["and", "or", "u_only", "d_only"],
+    "budget_slack": 0.01,
+    "bootstrap": 10000,
+    "seed": 1234
+  },
+  "latency": {
+    "n_list": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+    "warmup": 8,
+    "reps": 25
+  },
+  "conformal": {
+    "alpha": 0.05,
+    "delta": 0.1,
+    "epsilon": 0.05,
+    "scale": 1.0,
+    "split": 0.5
+  },
+  "out": "outputs"
+}

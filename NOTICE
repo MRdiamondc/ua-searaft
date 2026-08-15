@@ -1,0 +1,33 @@
+UA-SEA-RAFT
+===========
+
+This repository contains ONLY original code written for the project
+"Uncertainty-Aware Adaptive Iteration Stopping for SEA-RAFT".
+
+It contains NO source code copied from any third-party project.
+
+The upstream optical-flow model, SEA-RAFT, is consumed as a git submodule at
+`third_party/SEA-RAFT` and is licensed separately by its authors:
+
+    SEA-RAFT: Simple, Efficient, Accurate RAFT for Optical Flow
+    Yihan Wang, Lahav Lipson, Jia Deng (Princeton University)
+    ECCV 2024 (Oral) - arXiv:2405.14793
+    https://github.com/princeton-vl/SEA-RAFT
+    License: BSD-3-Clause (see third_party/SEA-RAFT/LICENSE after init)
+
+Nothing here modifies upstream files in place. The `scale` correction, the
+five uncertainty read-outs, the stopping criterion, the latency model, the
+threshold sweep and the risk certificate are all implemented in `ua_stop/`
+and applied from the outside, through a wrapper. This is deliberate: it keeps
+the licensing clean and makes every reported number reproducible against an
+unmodified upstream commit.
+
+Model weights (`MemorySlices/Tartan-C-T-TSKH-spring540x960-M`) are downloaded
+at run time from the authors' Hugging Face repository and are NOT redistributed
+here.
+
+Datasets (KITTI-2015, MPI-Sintel, Spring, TartanAir) are NOT redistributed.
+Each carries its own license and must be obtained from its official source.
+
+If you use this code, please cite SEA-RAFT (see README.md for the BibTeX
+entry) in addition to this repository.

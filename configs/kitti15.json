@@ -1,0 +1,19 @@
+{
+  "extends": "configs/default.json",
+  "source": {
+    "kind": "kitti15",
+    "kitti_root": "/content/kitti15",
+    "n": 200
+  },
+  "criterion": {
+    "q": 0.8,
+    "max_iters": 12
+  },
+  "conformal": {
+    "alpha": 0.05,
+    "delta": 0.1,
+    "epsilon": 0.05,
+    "split": 0.5
+  },
+  "out": "outputs"
+}
