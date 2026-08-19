@@ -1,152 +1,191 @@
-# UA-SEA-RAFT — uncertainty-aware adaptive stopping for SEA-RAFT
+# UA-SEA-RAFT
 
-Training-free early exit for [SEA-RAFT](https://github.com/princeton-vl/SEA-RAFT)
-(Wang, Lipson & Deng, ECCV 2024 Oral, [arXiv:2405.14793](https://arxiv.org/abs/2405.14793)).
-SEA-RAFT already predicts a Mixture-of-Laplace uncertainty at **every** refinement
-iteration and then throws it away. This repository uses it as a stopping signal:
-run the refinement loop only until the uncertainty **saturates**, instead of
-always paying for a fixed budget of 12 iterations.
+**Uncertainty-Aware Adaptive Refinement for SEA-RAFT**
 
-No retraining, no fine-tuning, no change to upstream code. Upstream is used
-unmodified as a git submodule.
+Training-free adaptive inference for [SEA-RAFT](https://github.com/princeton-vl/SEA-RAFT) that reuses its Mixture-of-Laplace (MoL) head as an uncertainty signal instead of spending the same refinement budget everywhere.
 
-```
-U_i = Quantile_q( u_i )                     global uncertainty at iteration i
-stop when  |U_{i-1} - U_i| / (U_{i-1} + eps) < tau_rel   (uncertainty saturated)
-           AND  mean ||mu_i - mu_{i-1}||    < tau_delta  (flow stopped moving)
-```
+> Research implementation. Run the self-tests before reporting benchmark numbers.
 
-## The one insight that makes this cheap to study
+## Why this exists
 
-A **global** (image-level) stop at iteration `n` is *bit-identical* to calling
-the model with `iters=n`. So there is no need to re-run the network for every
-threshold: run the full budget once, cache the per-iteration statistics, and
-replay thousands of thresholds offline on a CPU. Latency is measured separately
-via a cost model `T(n) = a + b·n`.
+SEA-RAFT predicts MoL parameters at every refinement iteration, but the uncertainty is discarded at inference. The standard pipeline still spends a fixed budget, usually up to 12 iterations, on every pixel. Smooth regions can converge early, while boundaries, occlusions, and large motion need more refinement.
 
-This equivalence is not assumed, it is asserted: `scripts/selftest.py` T6
-checks `torch.equal` between a short run and the cached index, and prints the
-measured list offset.
+UA-SEA-RAFT adds adaptive halting without retraining:
 
-## The negative result you should read first
-
-The uncertainty read-out shipped in upstream `custom.py` **cannot** be used as a
-stopping signal, and it takes one line of arithmetic to see why:
-
-```python
-log_b[:, 0] = torch.clamp(raw_b[:, 0], min=0,            max=args.var_max)
-log_b[:, 1] = torch.clamp(raw_b[:, 1], min=args.var_min, max=0)
+```text
+U_i = Quantile_q(u_i)
+stop when relative uncertainty change is small
+         AND the flow update is small
 ```
 
-The released eval configs set `var_min = 0`. Component 1 is therefore clamped to
-`[0, 0]` — identically zero, so `b_1 = exp(0) = 1` px for every pixel, at every
-iteration, forever. Component 0 is floored at 0, so wherever the network is
-*confident* (sub-pixel scale, i.e. negative log-scale) it is pinned to 0 as well.
-On a confident pair the scalar read-out collapses to the constant **1.000 px**.
-Our first run measured exactly that:
+The global policy is bit-identical to running SEA-RAFT with `iters=n`. This makes threshold sweeps reproducible from one full-budget trace instead of requiring a new GPU run for every threshold.
 
+## Main contributions
+
+1. **Correct MoL inference read-out.** The upstream training clamp is not reused at inference. With the released `var_min=0` setting, the naive read-out forces one component to `b=1 px` and pins confident predictions, collapsing the scalar signal. The implementation reads the pre-clamp `info` tensor directly:
+
+   ```text
+   w = softmax(logits)
+   b = exp(clipped raw_log_b)
+   E|e| = sum_k w_k b_k
+   F(t) = sum_k w_k (1 - exp(-t / b_k))
+   ```
+
+2. **Adaptive stopping.** Supports image-level `global` halting and experimental `tile` halting. The global method is exact. Tile mode uses exact correlation-row indexing on the active crop and reports its frozen-context semantics explicitly.
+
+3. **Calibration evaluation.** Includes AUSE, coverage reliability, coverage-ECE, Spearman rank correlation, heavy-component AUROC, and one-parameter scale recalibration.
+
+4. **Honest evaluation.** Includes `d_only`, uncertainty-only ablations, an oracle upper bound, cost-matched fixed-budget comparison, paired bootstrap intervals, Wilcoxon signed-rank testing, and an RCPS/Hoeffding risk certificate.
+
+5. **Two implementation fixes.**
+   - Explicitly overrides the upstream `scale` value instead of using a failing `setdefault` pattern.
+   - Replaces the invalid â€œmonotonicity means healthyâ€ test with dynamic-range and spatial-variance checks.
+
+6. **Free baseline speedup.** Upsampling is performed once after the refinement loop rather than once per iteration when only the final upsampled result is used.
+
+## Repository contents
+
+The current reference implementation is intentionally self-contained:
+
+```text
+ua_searaft.py       model wrapper, MoL read-out, stopping, metrics, tests
+README.md           this document
 ```
-u median = 1.000 px  (min 1, max 1)
-U@0.8 per iteration = [1.0006 1. 1. 1. 1. 1. 1.]
-```
 
-Worse, a naive self-test calls that series "decreasing", because the `1.0006` at
-index 0 makes it formally non-increasing. Figure 6 of the paper (variance
-decreases with iterations) can only have been plotted from **pre-clamp** values.
+SEA-RAFT is used as an external upstream dependency and is not vendored here.
 
-So `ua_stop/uncertainty.py` exposes five read-outs from the same forward pass —
-`raw`, `geo`, `clamped_lin`, `clamped_log`, `alpha` — and `clamp_pressure()`
-reports the fraction of pixels pinned on each bound, which turns "the signal was
-dead" into a number you can put in a table.
-
-## Install
+## Installation
 
 ```bash
-git clone https://github.com/USERNAME/ua-searaft.git
+git clone https://github.com/MRdiamondc/ua-searaft.git
 cd ua-searaft
-pip install -r requirements.txt
-bash scripts/setup_upstream.sh      # clones SEA-RAFT into third_party/, installs einops
+
+# Clone the upstream implementation outside this repository.
+git clone https://github.com/princeton-vl/SEA-RAFT third_party/SEA-RAFT
+
+pip install torch numpy einops huggingface_hub
 ```
 
-Works on a free Colab T4 (16 GB). Only `einops` and `huggingface_hub` are needed
-beyond a standard torch install; the released checkpoint
-(`MemorySlices/Tartan-C-T-TSKH-spring540x960-M`, ~90 MB) is pulled automatically.
+For loading local image files, install Pillow:
+
+```bash
+pip install pillow
+```
+
+The released checkpoint is loaded through Hugging Face when running the model:
+
+```text
+MemorySlices/Tartan-C-T-TSKH-spring540x960-M
+```
 
 ## Quickstart
 
-```bash
-python scripts/selftest.py          # 7 hard assertions. Never skip this.
-python scripts/diagnose.py          # is the signal alive? which clamp killed it?
-python scripts/run_latency.py       # T(n) = a + b n, and the saving ceiling
-python scripts/run_trace.py         # one full-budget pass per pair -> .npz
-python scripts/run_sweep.py         # the experiment, CPU only
-python scripts/run_calibrate.py     # RCPS risk certificate
-python scripts/make_figures.py      # fig1..fig4 as vector PDF
-```
-
-Every script accepts `--config` and repeatable dotted overrides:
+Run the CPU-only self-tests first:
 
 ```bash
-python scripts/run_trace.py --config configs/kitti15.json --set model.scale=-1 --set source.n=120
+python ua_searaft.py selftest
 ```
 
-## Layout
+Inspect whether the uncertainty signal is alive:
 
-```
-ua_stop/
-  uncertainty.py    five MoL read-outs, clamp pressure, signal_health
-  criterion.py      the stopping rule; pure numpy, six modes incl. ablations
-  model_wrapper.py  upstream SEA-RAFT without forking it (+ the scale fix)
-  data.py           synthetic exact-GT pairs, image folders, KITTI-2015
-  trace.py          ONE full-budget pass per sample -> cached npz
-  latency.py        T(n) = a + b n, criterion overhead, saving curve
-  sweep.py          offline replay, Pareto front, cost-matched baseline, oracle
-  conformal.py      RCPS risk certificate for the selected threshold
-  plots.py          the four paper figures
-  hooks.py          fallback signal: GRU hidden-state update norm
-  tile_stop.py      EXPERIMENTAL per-tile stopping (modelled cost only)
-scripts/            eight entry points, all with --help
-configs/            default.json and kitti15.json (extends default)
-tests/              pytest; the numpy-only ones run without a GPU
-docs/               RESULTS.md (fill with your numbers), PUBLISH.md
+```bash
+python ua_searaft.py diagnose \
+  --set scale=-1 \
+  --image1 path/to/frame_0001.png \
+  --image2 path/to/frame_0002.png
 ```
 
-## What is honest about the evaluation
+Measure the latency model on the target GPU:
 
-These are the things a reviewer will attack, so they are built into the code:
+```bash
+python ua_searaft.py latency \
+  --set scale=-1 \
+  --height 540 \
+  --width 960
+```
 
-1. **The ceiling is stated up front.** On a T4 at 1080×1920, refinement is only
-   **47%** of total latency (`a = 1042.02 ms`, `b = 76.15 ms`) — the paper
-   reports 51% for the L model on a 3090. Stopping at zero iterations saves
-   **46.4%** and *nothing can save more*. The realistic target is 20–30% at
-   under 1% accuracy loss.
-2. **The baseline is a cost-matched fixed budget**, not the full budget. Beating
-   "always 12 iterations" by spending less is trivial. `sweep.py` interpolates
-   the fixed-N curve at the *same* mean cost and reports a paired bootstrap CI
-   and a Wilcoxon test against it.
-3. **`d_only` is reported always.** If the flow-delta alone matches the full
-   criterion, the uncertainty head contributes nothing — that is the
-   make-or-break ablation, and it is a first-class mode, not an appendix.
-4. **An oracle bounds the headroom**, so "we could do better" becomes a number.
-5. **Selection is certified.** The threshold is chosen on data, so `conformal.py`
-   wraps it in RCPS with a Hoeffding bound and reports held-out risk too.
-6. **Modelled vs measured is never blurred.** `tile_stop.py` accuracy is exact,
-   its cost is a model of an ideal sparse kernel and says so in every output.
-7. **The synthetic set is a development set only.** Exact ground truth, but no
-   occlusions and no real motion statistics, so it is optimistic by construction.
+If image paths are omitted, `diagnose` uses a synthetic shifted pair for development only. Synthetic data is optimistic: it has exact construction but no real occlusions or motion statistics.
 
-## Known bug we shipped and fixed
+## Configuration overrides
 
-`config/eval/spring-M.json` ships `scale: -1` and the checkpoint is trained at
-540×960, but `cfg.setdefault("scale", 0)` can never override an existing value,
-so our first run executed at 1080×1920 — roughly 4× slower for nothing. The fix
-lives in `model_wrapper.build_args` (explicit `setattr`, never `setdefault`) and
-is asserted by selftest T4 (`scale_check`), which fails loudly rather than
-silently wasting an hour.
+Use repeatable dotted overrides:
+
+```bash
+python ua_searaft.py diagnose \
+  --set scale=-1 \
+  --set halt.mode=full \
+  --set halt.granularity=global \
+  --set halt.q=0.8 \
+  --set halt.tau_rel=0.02 \
+  --set halt.tau_delta=0.05 \
+  --set halt.min_iters=2 \
+  --set halt.max_iters=12
+```
+
+Important options:
+
+| Option | Meaning | Default |
+|---|---|---:|
+| `scale` | Resolution exponent relative to the input | `-1` |
+| `halt.mode` | `full`, `u_rel`, `u_abs`, `d_only`, `fixed`, `random`, or `oracle` | `full` |
+| `halt.granularity` | `global` or `tile` | `global` |
+| `halt.q` | Quantile used for global uncertainty | `0.80` |
+| `halt.tau_rel` | Relative uncertainty saturation threshold | `0.02` |
+| `halt.tau_abs` | Absolute uncertainty-drop threshold | `0.01` |
+| `halt.tau_delta` | Flow-update threshold | `0.05` |
+| `halt.min_iters` | Minimum refinement iterations | `2` |
+| `halt.max_iters` | Maximum refinement iterations | `12` |
+| `halt.tile` | Tile size at 1/8 resolution | `16` |
+| `mol.b_clip` | Numerical log-scale guard, not the training clamp | `8.0` |
+| `mol.recal_scale` | Multiplicative uncertainty recalibration | `1.0` |
+
+## Evaluation protocol
+
+Do not compare adaptive inference only against â€œalways 12 iterationsâ€. That comparison rewards any method that spends less. The primary baseline is a fixed iteration count with the **same measured mean cost**.
+
+Report all of the following:
+
+- EPE and 1-pixel outlier rate.
+- Mean and percentile iterations used.
+- Measured latency and the fitted `T(n)=a+bÂ·n` model.
+- Cost-matched fixed-budget baseline.
+- `d_only` ablation, to test whether uncertainty contributes beyond flow movement.
+- Uncertainty-only ablations.
+- Oracle iteration choice, as an upper bound.
+- Paired bootstrap confidence interval and Wilcoxon signed-rank test.
+- Calibration: AUSE, coverage-ECE, signed coverage bias, Spearman correlation, and heavy-component AUROC.
+- RCPS-selected threshold and held-out risk.
+
+The absolute saving ceiling of the linear cost model is the refinement fraction at the maximum budget. On the example T4 measurements (`a=1042.02 ms`, `b=76.15 ms`), this ceiling is about 46%, not a claim of achievable accuracy-preserving speedup.
+
+## Exactness notes
+
+- **Global halting:** exact and bit-identical to fixed-budget SEA-RAFT with the selected iteration count.
+- **Tile halting:** correlation lookup on the cropped active region is exact, but frozen tiles provide frozen context to active neighbours through the measured halo. Results are therefore labelled `exact-with-frozen-context`, not incorrectly advertised as bit-identical.
+- **Tile cost:** the current implementation performs real cropped inference, but any ideal sparse-kernel projection must be labelled modelled until measured with a production sparse kernel.
+
+## Self-tests
+
+`python ua_searaft.py selftest` checks:
+
+- the naive MoL read-out collapses under the released clamp settings;
+- the corrected read-out has a live dynamic range;
+- MoL quantiles invert the CDF;
+- cropped correlation equals the corresponding full-grid slice;
+- global early exit equals fixed `iters=n`;
+- the resolution-scale override cannot regress;
+- the receptive-field halo is measured;
+- tile halting stays inside budget;
+- AUSE, RCPS, and cost-matched evaluation behave as expected.
+
+## Related work
+
+- Y. Wang, L. Lipson, and J. Deng. **SEA-RAFT: Simple, Efficient, Accurate RAFT for Optical Flow.** ECCV 2024 Oral. [arXiv:2405.14793](https://arxiv.org/abs/2405.14793).
+- Y. Wang and J. Deng. **WAFT: Warping-Alone Field Transforms for Optical Flow.** ICLR 2026 Oral. [arXiv:2506.21526](https://arxiv.org/abs/2506.21526). WAFT replaces the cost volume with high-resolution warping and is a useful second baseline for testing whether adaptive halting transfers beyond SEA-RAFT.
 
 ## Citation
 
-If this code is useful, please cite SEA-RAFT as well:
+Please cite SEA-RAFT when using this repository:
 
 ```bibtex
 @inproceedings{wang2024searaft,
@@ -159,6 +198,4 @@ If this code is useful, please cite SEA-RAFT as well:
 
 ## License
 
-This repository: MIT (see `LICENSE`). SEA-RAFT is BSD-3-Clause and is **not**
-vendored here — `scripts/setup_upstream.sh` clones it into `third_party/`. See
-`NOTICE` for attribution details.
+This repository is MIT. SEA-RAFT is BSD-3-Clause and is not vendored here. See the upstream repository and the project license files for attribution details.
